@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
-  LineChart,
-  Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -11,12 +12,46 @@ import {
 } from 'recharts'
 import { useWallet } from '../context/WalletContext.jsx'
 import { GAMES } from '../games/registry.js'
+import Icon from '../components/Icon.jsx'
+import Sheet from '../components/Sheet.jsx'
 import { formatCredits, formatTime } from '../utils/format.js'
 
-const GAME_NAMES = Object.fromEntries(GAMES.map((g) => [g.name, g.icon]))
+const GAME_IDS = Object.fromEntries(GAMES.map((g) => [g.name, g.id]))
+
+// chart colours mirror the CSS tokens in index.css
+const C = {
+  win: '#4FC48E',
+  loss: '#EF6B61',
+  grid: '#1F2B26',
+  axis: '#8E8A7D',
+  zero: '#3A4A42',
+  panel: '#18221E',
+  border: '#34443C',
+  text: '#F3EEE3',
+}
+
+function signed(n) {
+  return `${n >= 0 ? '+' : '−'}${formatCredits(Math.abs(n))}`
+}
+
+function tone(n) {
+  return n > 0 ? 'win-text' : n < 0 ? 'loss-text' : ''
+}
+
+function EmptyState({ children }) {
+  return (
+    <div className="empty">
+      <p>{children}</p>
+      <Link to="/" className="btn btn-quiet btn-sm">
+        Go to the lobby
+      </Link>
+    </div>
+  )
+}
 
 export default function Stats() {
   const { history, netProfit, clearHistory } = useWallet()
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const agg = useMemo(() => {
     let wagered = 0
@@ -24,9 +59,11 @@ export default function Stats() {
     let lost = 0 // total bet on losing rounds
     let wins = 0
     let decided = 0 // rounds that count toward win-rate (exclude pushes)
+    let best = 0 // largest single-round profit
 
     for (const r of history) {
       wagered += r.bet
+      if (r.profit > best) best = r.profit
       if (r.result === 'win') {
         won += r.payout
         wins += 1
@@ -38,7 +75,7 @@ export default function Stats() {
     }
 
     const winRate = decided ? (wins / decided) * 100 : 0
-    return { wagered, won, lost, wins, decided, winRate }
+    return { wagered, won, lost, wins, decided, winRate, best }
   }, [history])
 
   const chartData = useMemo(() => {
@@ -70,161 +107,218 @@ export default function Stats() {
 
   const recent = useMemo(() => [...history].slice(-25).reverse(), [history])
 
+  const lineColor = netProfit >= 0 ? C.win : C.loss
+
   return (
     <div className="page">
-      <div className="row space-between wrap" style={{ marginBottom: 6 }}>
-        <div className="page-title">Stats &amp; History</div>
+      <header className="page-head page-head-row">
+        <div>
+          <h1 className="page-title">Stats</h1>
+          <p className="page-sub">Every round you have played on this device.</p>
+        </div>
         {history.length > 0 && (
-          <button
-            className="btn btn-sm btn-ghost"
-            onClick={() => {
-              if (window.confirm('Clear all session history? This cannot be undone.')) clearHistory()
-            }}
-          >
-            Clear History
+          <button className="btn btn-quiet btn-sm" onClick={() => setConfirmOpen(true)}>
+            <Icon name="trash" size={16} />
+            Clear history
           </button>
         )}
-      </div>
-      <div className="page-sub">Your virtual-credit play history for this browser.</div>
+      </header>
 
-      <div className="stat-row">
-        <div className="stat-card">
-          <div className="k">Total Wagered</div>
-          <div className="v">{formatCredits(agg.wagered)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="k">Total Returned</div>
-          <div className="v win-text">{formatCredits(agg.won)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="k">Total Lost</div>
-          <div className="v loss-text">{formatCredits(agg.lost)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="k">Net Profit / Loss</div>
-          <div className={`v ${netProfit >= 0 ? 'win-text' : 'loss-text'}`}>
-            {netProfit >= 0 ? '+' : '−'}
-            {formatCredits(Math.abs(netProfit))}
+      <section className="kpis" aria-label="Totals">
+        <div className="kpi-lead">
+          <div className="summary-label">Net result</div>
+          <div className={`summary-figure ${tone(netProfit)}`}>
+            {signed(netProfit)}
+            <span className="unit">credits</span>
+          </div>
+          <div className="kpi-foot">
+            across {history.length.toLocaleString()} {history.length === 1 ? 'round' : 'rounds'}
           </div>
         </div>
-        <div className="stat-card">
-          <div className="k">Win Rate</div>
-          <div className="v">{agg.winRate.toFixed(1)}%</div>
+        <div className="kpi">
+          <div className="summary-label">Wagered</div>
+          <div className="summary-value">{formatCredits(agg.wagered)}</div>
         </div>
-        <div className="stat-card">
-          <div className="k">Rounds Played</div>
-          <div className="v">{history.length}</div>
+        <div className="kpi">
+          <div className="summary-label">Returned</div>
+          <div className="summary-value">{formatCredits(agg.won)}</div>
         </div>
-      </div>
+        <div className="kpi">
+          <div className="summary-label">Lost</div>
+          <div className="summary-value">{formatCredits(agg.lost)}</div>
+        </div>
+        <div className="kpi">
+          <div className="summary-label">Win rate</div>
+          <div className="summary-value">
+            {agg.winRate.toFixed(1)}
+            <span className="unit">%</span>
+          </div>
+        </div>
+        <div className="kpi">
+          <div className="summary-label">Best round</div>
+          <div className={`summary-value ${agg.best > 0 ? 'win-text' : ''}`}>
+            {agg.best > 0 ? signed(agg.best) : '—'}
+          </div>
+        </div>
+        <div className="kpi">
+          <div className="summary-label">Games tried</div>
+          <div className="summary-value">
+            {perGame.length}
+            <span className="unit">of {GAMES.length}</span>
+          </div>
+        </div>
+      </section>
 
-      <div className="panel" style={{ marginBottom: 24 }}>
-        <div style={{ fontWeight: 700, marginBottom: 6 }}>Cumulative Profit / Loss</div>
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">Running result</h2>
+          {history.length > 0 && <span className="panel-meta">Cumulative, by round</span>}
+        </div>
         {history.length === 0 ? (
-          <div className="muted" style={{ padding: '40px 0', textAlign: 'center' }}>
-            No bets yet — play a game to start building your chart.
-          </div>
+          <EmptyState>No rounds yet. Play a game and your running result is charted here.</EmptyState>
         ) : (
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 10, right: 16, bottom: 4, left: 4 }}>
-                <CartesianGrid stroke="#2c4256" strokeDasharray="3 3" />
-                <XAxis dataKey="idx" stroke="#8aa0b2" tick={{ fontSize: 12 }} label={{ value: 'Round', position: 'insideBottom', offset: -2, fill: '#5d7689', fontSize: 12 }} />
-                <YAxis stroke="#8aa0b2" tick={{ fontSize: 12 }} width={60} />
+              <AreaChart data={chartData} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="pl-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={lineColor} stopOpacity={0.22} />
+                    <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke={C.grid} vertical={false} />
+                <XAxis
+                  dataKey="idx"
+                  stroke={C.axis}
+                  tick={{ fontSize: 12, fill: C.axis }}
+                  tickLine={false}
+                  axisLine={false}
+                  minTickGap={24}
+                />
+                <YAxis
+                  stroke={C.axis}
+                  tick={{ fontSize: 12, fill: C.axis }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={56}
+                />
                 <Tooltip
-                  contentStyle={{ background: '#1a2c3a', border: '1px solid #2c4256', borderRadius: 8, color: '#e9f1f7' }}
-                  formatter={(v) => [formatCredits(v), 'Cumulative P/L']}
+                  cursor={{ stroke: C.border }}
+                  contentStyle={{
+                    background: C.panel,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 10,
+                    color: C.text,
+                    fontSize: 13,
+                  }}
+                  labelStyle={{ color: C.axis, marginBottom: 2 }}
+                  formatter={(v) => [signed(v), 'Running result']}
                   labelFormatter={(l) => `Round ${l}`}
                 />
-                <ReferenceLine y={0} stroke="#5d7689" />
-                <Line
+                <ReferenceLine y={0} stroke={C.zero} />
+                <Area
                   type="monotone"
                   dataKey="profit"
-                  stroke={netProfit >= 0 ? '#00e701' : '#ff4d4d'}
+                  stroke={lineColor}
                   strokeWidth={2}
+                  fill="url(#pl-fill)"
                   dot={false}
+                  activeDot={{ r: 4, strokeWidth: 0, fill: lineColor }}
                   isAnimationActive={false}
                 />
-              </LineChart>
+              </AreaChart>
             </ResponsiveContainer>
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="panel" style={{ marginBottom: 24 }}>
-        <div style={{ fontWeight: 700, marginBottom: 12 }}>Per-Game Breakdown</div>
-        {perGame.length === 0 ? (
-          <div className="muted">No data yet.</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Game</th>
-                  <th className="num">Rounds</th>
-                  <th className="num">Wagered</th>
-                  <th className="num">Win Rate</th>
-                  <th className="num">Net P/L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {perGame.map((g) => (
-                  <tr key={g.game}>
-                    <td>
-                      {GAME_NAMES[g.game] || '🎮'} {g.game}
-                    </td>
-                    <td className="num">{g.rounds}</td>
-                    <td className="num">{formatCredits(g.wagered)}</td>
-                    <td className="num">{g.decided ? ((g.wins / g.decided) * 100).toFixed(1) : '0.0'}%</td>
-                    <td className={`num ${g.profit >= 0 ? 'win-text' : 'loss-text'}`}>
-                      {g.profit >= 0 ? '+' : '−'}
-                      {formatCredits(Math.abs(g.profit))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="stats-columns">
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">By game</h2>
+            {perGame.length > 0 && <span className="panel-meta">Net result</span>}
           </div>
-        )}
-      </div>
+          {perGame.length === 0 ? (
+            <EmptyState>Your results per game will appear here.</EmptyState>
+          ) : (
+            <ul className="ledger">
+              {perGame.map((g) => (
+                <li key={g.game} className="ledger-row">
+                  <span className="ledger-glyph">
+                    <Icon name={GAME_IDS[g.game]} size={18} />
+                  </span>
+                  <span className="ledger-main">
+                    <span className="ledger-title">{g.game}</span>
+                    <span className="ledger-sub">
+                      {g.rounds} {g.rounds === 1 ? 'round' : 'rounds'} · {formatCredits(g.wagered)} wagered
+                    </span>
+                  </span>
+                  <span className="ledger-end">
+                    <span className={`ledger-figure ${tone(g.profit)}`}>{signed(g.profit)}</span>
+                    <span className="ledger-sub">
+                      {g.decided ? ((g.wins / g.decided) * 100).toFixed(1) : '0.0'}% won
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      <div className="panel">
-        <div style={{ fontWeight: 700, marginBottom: 12 }}>Recent Bets</div>
-        {recent.length === 0 ? (
-          <div className="muted">No bets yet.</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Game</th>
-                  <th className="num">Bet</th>
-                  <th className="num">Multiplier</th>
-                  <th>Result</th>
-                  <th className="num">Profit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recent.map((r) => (
-                  <tr key={r.id}>
-                    <td className="muted">{formatTime(r.time)}</td>
-                    <td>{r.game}</td>
-                    <td className="num">{formatCredits(r.bet)}</td>
-                    <td className="num">{r.multiplier ? `${r.multiplier.toFixed(2)}×` : '—'}</td>
-                    <td>
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">Recent rounds</h2>
+            {recent.length > 0 && <span className="panel-meta">Last {recent.length}</span>}
+          </div>
+          {recent.length === 0 ? (
+            <EmptyState>Each round you play is listed here, newest first.</EmptyState>
+          ) : (
+            <ul className="ledger">
+              {recent.map((r) => (
+                <li key={r.id} className="ledger-row">
+                  <span className="ledger-glyph">
+                    <Icon name={GAME_IDS[r.game]} size={18} />
+                  </span>
+                  <span className="ledger-main">
+                    <span className="ledger-title">
+                      {r.game}
                       <span className={`badge ${r.result}`}>{r.result}</span>
-                    </td>
-                    <td className={`num ${r.profit >= 0 ? 'win-text' : 'loss-text'}`}>
-                      {r.profit >= 0 ? '+' : '−'}
-                      {formatCredits(Math.abs(r.profit))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                    </span>
+                    <span className="ledger-sub">
+                      {formatTime(r.time)} · bet {formatCredits(r.bet)}
+                    </span>
+                  </span>
+                  <span className="ledger-end">
+                    <span className={`ledger-figure ${tone(r.profit)}`}>{signed(r.profit)}</span>
+                    <span className="ledger-sub">{r.multiplier ? `${r.multiplier.toFixed(2)}×` : '—'}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
+
+      <Sheet open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Clear history?" size="sm">
+        <p className="sheet-text">
+          This removes all {history.length.toLocaleString()} rounds and resets your stats. Your balance
+          stays as it is. This cannot be undone.
+        </p>
+        <div className="sheet-actions">
+          <button className="btn btn-quiet" onClick={() => setConfirmOpen(false)} data-autofocus>
+            Keep history
+          </button>
+          <button
+            className="btn btn-danger"
+            onClick={() => {
+              clearHistory()
+              setConfirmOpen(false)
+            }}
+          >
+            Clear history
+          </button>
+        </div>
+      </Sheet>
     </div>
   )
 }
